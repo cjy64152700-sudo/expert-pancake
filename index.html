@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>모바일 심박 측정</title>
+
+<style>
+body { text-align:center; font-family:sans-serif; }
+video { width:90%; max-width:350px; border-radius:10px; }
+button { font-size:18px; padding:10px; margin-top:10px; }
+</style>
+</head>
+
+<body>
+
+<h2>📱 모바일 심박 측정 (범용 안정 버전)</h2>
+
+<button onclick="start()">측정 시작</button>
+<p id="status">대기 중</p>
+
+<video id="video" autoplay playsinline muted></video>
+<canvas id="canvas" width="300" height="200" style="display:none;"></canvas>
+
+<h3>심박수: <span id="bpm">--</span></h3>
+
+<p style="color:red;">
+👉 카메라 + 플래시를 손가락으로 완전히 덮어주세요
+</p>
+
+<script>
+let video = document.getElementById("video");
+let canvas = document.getElementById("canvas");
+let ctx = canvas.getContext("2d");
+
+let signal = [];
+let times = [];
+let measuring = false;
+
+// ✅ 1단계: 카메라 지원 확인
+function checkSupport() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("이 기기는 카메라 기능을 지원하지 않습니다.");
+    return false;
+  }
+  return true;
+}
+
+// ✅ 2단계: 카메라 실행 (모든 기기 대응)
+async function start() {
+
+  if (!checkSupport()) return;
+
+  document.getElementById("status").innerText = "카메라 요청 중...";
+
+  try {
+    // 권한 요청
+    await navigator.mediaDevices.getUserMedia({ video: true });
+
+    let stream;
+
+    // ✅ 후면 카메라 우선 시도
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { exact: "environment" } }
+      });
+    } catch (e) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" }
+        });
+      } catch (e2) {
+        // fallback: 아무 카메라
+        stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      }
+    }
+
+    video.srcObject = stream;
+
+    video.onloadedmetadata = () => {
+      video.play();
+      document.getElementById("status").innerText = "측정 시작";
+      measuring = true;
+      setTimeout(measureLoop, 2000);
+    };
+
+  } catch (err) {
+    document.getElementById("status").innerText =
+      "❌ 권한 거부 또는 지원되지 않는 환경";
+    console.error(err);
+  }
+}
+
+// ✅ 3단계: 신호 측정 루프
+function measureLoop() {
+
+  if (!measuring) return;
+
+  setInterval(() => {
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    let frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let data = frame.data;
+
+    let redSum = 0;
+
+    for (let i = 0; i < data.length; i += 4) {
+      redSum += data[i];
+    }
+
+    let avg = redSum / (data.length / 4);
+
+    // ✅ 노이즈 필터 (간단 smoothing)
+    let smooth = avg;
+    if (signal.length > 0) {
+      smooth = 0.7 * signal[signal.length - 1] + 0.3 * avg;
+    }
+
+    signal.push(smooth);
+    times.push(Date.now());
+
+    if (signal.length > 180) {
+      signal.shift();
+      times.shift();
+      calculateBPM();
+    }
+
+  }, 80);
+}
+
+// ✅ 4단계: 심박 계산 (안정화)
+function calculateBPM() {
+
+  let peaks = 0;
+
+  for (let i = 1; i < signal.length - 1; i++) {
+    if (
+      signal[i] > signal[i - 1] &&
+      signal[i] > signal[i + 1] &&
+      signal[i] > 140
+    ) {
+      peaks++;
+    }
+  }
+
+  let duration = (times[times.length - 1] - times[0]) / 1000;
+
+  let bpm = Math.round((peaks / duration) * 60);
+
+  // ✅ 비정상값 제거
+  if (bpm > 40 && bpm < 180) {
+    document.getElementById("bpm").innerText = bpm + " BPM";
+  }
+}
+</script>
+
+</body>
+</html>
