@@ -185,7 +185,7 @@ function calculateBPM() {
     if (
       signal[i] > signal[i - 1] &&
       signal[i] > signal[i + 1] &&
-      signal[i] > avg + 2
+      signal[i] > avg + 0.5
     ) {
       let t = times[i];
 
