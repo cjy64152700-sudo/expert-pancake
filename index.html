@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>헬스 통합 앱</title>
+<style>
+body { font-family: Arial; text-align:center; }
+button { margin:5px; padding:10px; }
+input, textarea { margin:5px; padding:5px; }
+</style>
+</head>
+<body>
+
+<h1>헬스 통합 앱</h1>
+
+<button onclick="showPage('heart')">심박 측정</button>
+<button onclick="showPage('drug')">혈중 농도</button>
+<button onclick="showPage('compare')">비교/맞춤화</button>
+
+<!-- ❤️ 심박 -->
+<div id="heart" style="display:none;">
+  <h2>심박 측정</h2>
+  <video id="video" width="200" autoplay></video>
+  <p>BPM: <span id="bpm">0</span></p>
+</div>
+
+<!-- 💊 혈중 농도 -->
+<div id="drug" style="display:none;">
+  <h2>혈중 농도 계산</h2>
+  <input id="dose" type="number" placeholder="투여량"><br>
+  <input id="halfLife" type="number" placeholder="반감기"><br>
+  <input id="interval" type="number" placeholder="투여 간격"><br>
+  <input id="totalTime" type="number" placeholder="총 시간"><br>
+  <button onclick="calc()">계산</button>
+</div>
+
+<!-- 📊 비교 -->
+<div id="compare" style="display:none;">
+  <h2>실측 vs 예측</h2>
+
+  <p>실측값 입력 (쉼표로 구분)</p>
+  <textarea id="realData" rows="3" cols="30" placeholder="예: 10,15,18,12"></textarea><br>
+
+  <button onclick="compare()">비교 및 반감기 추정</button>
+
+  <p>추정 반감기: <span id="estimatedHalf">-</span></p>
+
+  <canvas id="graph" width="300" height="200"></canvas>
+</div>
+
+<script>
+//////////////////////
+// 페이지 전환
+//////////////////////
+function showPage(page) {
+  document.getElementById("heart").style.display = "none";
+  document.getElementById("drug").style.display = "none";
+  document.getElementById("compare").style.display = "none";
+  document.getElementById(page).style.display = "block";
+}
+
+//////////////////////
+// ❤️ 심박 측정
+//////////////////////
+let video = document.getElementById("video");
+let bpmDisplay = document.getElementById("bpm");
+let stream;
+
+navigator.mediaDevices.getUserMedia({ video: true })
+.then(s => {
+  stream = s;
+  video.srcObject = s;
+})
+.catch(() => alert("카메라 접근 실패"));
+
+let signal = [];
+
+setInterval(() => {
+  let value = Math.random() * 10; // 실제 측정값 자리
+  signal.push(value);
+
+  if (signal.length > 50) signal.shift();
+
+  let avg = signal.reduce((a,b)=>a+b,0)/signal.length;
+  let peaks = signal.filter(v => v > avg + 3).length;
+
+  let bpm = peaks * (60 / (signal.length * 0.1));
+
+  if (bpm > 40 && bpm < 180) {
+    bpmDisplay.innerText = Math.round(bpm);
+  }
+
+}, 100);
+
+//////////////////////
+// 💊 혈중 농도
+//////////////////////
+let predictedData = [];
+
+function calc() {
+  let dose = Number(document.getElementById("dose").value);
+  let halfLife = Number(document.getElementById("halfLife").value);
+  let interval = Number(document.getElementById("interval").value);
+  let totalTime = Number(document.getElementById("totalTime").value);
+
+  predictedData = [];
+
+  for (let t = 0; t <= totalTime; t++) {
+    let conc = 0;
+    for (let d = 0; d <= t; d += interval) {
+      conc += dose * Math.pow(0.5, (t - d) / halfLife);
+    }
+    predictedData.push(conc);
+  }
+
+  drawGraph(predictedData, []);
+}
+
+//////////////////////
+// 📊 비교 + 반감기 추정
+//////////////////////
+function compare() {
+  let input = document.getElementById("realData").value;
+  let realData = input.split(",").map(v => Number(v.trim())).filter(v => !isNaN(v));
+
+  if (realData.length === 0 || predictedData.length === 0) {
+    alert("데이터 부족");
+    return;
+  }
+
+  let bestHalf = 0;
+  let bestError = Infinity;
+
+  // 🔥 반감기 자동 탐색
+  for (let h = 1; h <= 50; h += 0.5) {
+    let temp = [];
+
+    for (let t = 0; t < realData.length; t++) {
+      let conc = 0;
+      for (let d = 0; d <= t; d += 1) {
+        conc += realData[0] * Math.pow(0.5, (t - d) / h);
+      }
+      temp.push(conc);
+    }
+
+    let error = 0;
+    for (let i = 0; i < realData.length; i++) {
+      error += Math.abs(realData[i] - temp[i]);
+    }
+
+    if (error < bestError) {
+      bestError = error;
+      bestHalf = h;
+    }
+  }
+
+  document.getElementById("estimatedHalf").innerText = bestHalf.toFixed(2);
+
+  drawGraph(predictedData, realData);
+}
+
+//////////////////////
+// 📈 그래프
+//////////////////////
+function drawGraph(pred, real) {
+  let canvas = document.getElementById("graph");
+  let ctx = canvas.getContext("2d");
+
+  ctx.clearRect(0,0,300,200);
+
+  let allData = pred.concat(real);
+  let max = Math.max(...allData, 1);
+
+  // 예측 (파랑)
+  ctx.beginPath();
+  ctx.strokeStyle = "blue";
+  for (let i = 0; i < pred.length; i++) {
+    let x = i * (300 / pred.length);
+    let y = 200 - (pred[i] / max * 200);
+    ctx.lineTo(x,y);
+  }
+  ctx.stroke();
+
+  // 실측 (빨강)
+  if (real.length > 0) {
+    ctx.beginPath();
+    ctx.strokeStyle = "red";
+    for (let i = 0; i < real.length; i++) {
+      let x = i * (300 / real.length);
+      let y = 200 - (real[i] / max * 200);
+      ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+  }
+}
+</script>
+
+</body>
+</html>
