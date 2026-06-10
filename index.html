@@ -1,197 +1,182 @@
 <!DOCTYPE html>
-<html>
+<html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>헬스 통합 앱</title>
+<title>통합 시뮬레이터</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
-body { font-family: Arial; text-align:center; }
-button { margin:5px; padding:10px; }
-input, textarea { margin:5px; padding:5px; }
+body { font-family: Arial; margin:20px; }
+nav button { margin-right:10px; }
+section { display:none; margin-top:20px; }
+input { margin:5px; }
+canvas { max-width:700px; margin-top:20px; }
 </style>
 </head>
+
 <body>
 
-<h1>헬스 통합 앱</h1>
+<h1>헬스 통합 시뮬레이터</h1>
 
-<button onclick="showPage('heart')">심박 측정</button>
-<button onclick="showPage('drug')">혈중 농도</button>
-<button onclick="showPage('compare')">비교/맞춤화</button>
+<nav>
+<button onclick="show('heart')">심박 측정</button>
+<button onclick="show('drug')">혈중 농도</button>
+<button onclick="show('compare')">비교/맞춤화</button>
+</nav>
 
-<!-- ❤️ 심박 -->
-<div id="heart" style="display:none;">
-  <h2>심박 측정</h2>
-  <video id="video" width="200" autoplay></video>
-  <p>BPM: <span id="bpm">0</span></p>
-</div>
+<!-- 심박 -->
+<section id="heart">
+<h2>심박 측정</h2>
+<button onclick="measure()">측정 시작</button>
+<p id="bpm">BPM: -</p>
+<canvas id="heartChart"></canvas>
+</section>
 
-<!-- 💊 혈중 농도 -->
-<div id="drug" style="display:none;">
-  <h2>혈중 농도 계산</h2>
-  <input id="dose" type="number" placeholder="투여량"><br>
-  <input id="halfLife" type="number" placeholder="반감기"><br>
-  <input id="interval" type="number" placeholder="투여 간격"><br>
-  <input id="totalTime" type="number" placeholder="총 시간"><br>
-  <button onclick="calc()">계산</button>
-</div>
+<!-- 농도 -->
+<section id="drug">
+<h2>혈중 농도 계산</h2>
 
-<!-- 📊 비교 -->
-<div id="compare" style="display:none;">
-  <h2>실측 vs 예측</h2>
+<input id="dose" placeholder="투여량">
+<input id="halfLife" placeholder="반감기">
+<input id="interval" placeholder="투여 간격">
+<input id="totalTime" placeholder="총 시간">
+<input id="max" placeholder="최대 농도">
+<input id="min" placeholder="최소 농도">
+<input id="stopTime" placeholder="중단 시간">
+<input id="timeUnit" placeholder="시간 단위">
 
-  <p>실측값 입력 (쉼표로 구분)</p>
-  <textarea id="realData" rows="3" cols="30" placeholder="예: 10,15,18,12"></textarea><br>
+<br>
+<button onclick="simulate()">계산</button>
 
-  <button onclick="compare()">비교 및 반감기 추정</button>
+<canvas id="drugChart"></canvas>
+</section>
 
-  <p>추정 반감기: <span id="estimatedHalf">-</span></p>
+<!-- 비교 -->
+<section id="compare">
+<h2>실측 vs 예측</h2>
 
-  <canvas id="graph" width="300" height="200"></canvas>
-</div>
+<input id="realData" placeholder="실측값 (쉼표로)">
+<button onclick="compare()">비교</button>
+
+<p id="halfLifeResult"></p>
+<canvas id="compareChart"></canvas>
+</section>
 
 <script>
-//////////////////////
-// 페이지 전환
-//////////////////////
-function showPage(page) {
-  document.getElementById("heart").style.display = "none";
-  document.getElementById("drug").style.display = "none";
-  document.getElementById("compare").style.display = "none";
-  document.getElementById(page).style.display = "block";
+function show(id){
+ document.querySelectorAll("section").forEach(s=>s.style.display="none");
+ document.getElementById(id).style.display="block";
 }
 
-//////////////////////
-// ❤️ 심박 측정
-//////////////////////
-let video = document.getElementById("video");
-let bpmDisplay = document.getElementById("bpm");
-let stream;
+// ---------------- 심박 ----------------
+let heartChart;
 
-navigator.mediaDevices.getUserMedia({ video: true })
-.then(s => {
-  stream = s;
-  video.srcObject = s;
-})
-.catch(() => alert("카메라 접근 실패"));
+function measure(){
+ let data=[];
+ for(let i=0;i<50;i++){
+   data.push(60 + Math.random()*20);
+ }
+ let avg = data.reduce((a,b)=>a+b)/data.length;
 
-let signal = [];
+ let peaks = data.filter(v => v > avg + 3);
+ let bpm = peaks.length * 2;
 
-setInterval(() => {
-  let value = Math.random() * 10; // 실제 측정값 자리
-  signal.push(value);
+ document.getElementById("bpm").innerText = "BPM: " + bpm;
 
-  if (signal.length > 50) signal.shift();
+ if(heartChart) heartChart.destroy();
 
-  let avg = signal.reduce((a,b)=>a+b,0)/signal.length;
-  let peaks = signal.filter(v => v > avg + 3).length;
-
-  let bpm = peaks * (60 / (signal.length * 0.1));
-
-  if (bpm > 40 && bpm < 180) {
-    bpmDisplay.innerText = Math.round(bpm);
+ heartChart = new Chart(document.getElementById("heartChart"),{
+  type:"line",
+  data:{
+   labels:data.map((_,i)=>i),
+   datasets:[{label:"Signal", data}]
   }
-
-}, 100);
-
-//////////////////////
-// 💊 혈중 농도
-//////////////////////
-let predictedData = [];
-
-function calc() {
-  let dose = Number(document.getElementById("dose").value);
-  let halfLife = Number(document.getElementById("halfLife").value);
-  let interval = Number(document.getElementById("interval").value);
-  let totalTime = Number(document.getElementById("totalTime").value);
-
-  predictedData = [];
-
-  for (let t = 0; t <= totalTime; t++) {
-    let conc = 0;
-    for (let d = 0; d <= t; d += interval) {
-      conc += dose * Math.pow(0.5, (t - d) / halfLife);
-    }
-    predictedData.push(conc);
-  }
-
-  drawGraph(predictedData, []);
+ });
 }
 
-//////////////////////
-// 📊 비교 + 반감기 추정
-//////////////////////
-function compare() {
-  let input = document.getElementById("realData").value;
-  let realData = input.split(",").map(v => Number(v.trim())).filter(v => !isNaN(v));
+// ---------------- 농도 ----------------
+let drugData = [];
+let drugChart;
 
-  if (realData.length === 0 || predictedData.length === 0) {
-    alert("데이터 부족");
-    return;
-  }
-
-  let bestHalf = 0;
-  let bestError = Infinity;
-
-  // 🔥 반감기 자동 탐색
-  for (let h = 1; h <= 50; h += 0.5) {
-    let temp = [];
-
-    for (let t = 0; t < realData.length; t++) {
-      let conc = 0;
-      for (let d = 0; d <= t; d += 1) {
-        conc += realData[0] * Math.pow(0.5, (t - d) / h);
-      }
-      temp.push(conc);
-    }
-
-    let error = 0;
-    for (let i = 0; i < realData.length; i++) {
-      error += Math.abs(realData[i] - temp[i]);
-    }
-
-    if (error < bestError) {
-      bestError = error;
-      bestHalf = h;
-    }
-  }
-
-  document.getElementById("estimatedHalf").innerText = bestHalf.toFixed(2);
-
-  drawGraph(predictedData, realData);
+function num(id){
+ let v = parseFloat(document.getElementById(id).value);
+ if(isNaN(v) || v <= 0){
+   alert(id + " 값 오류");
+   throw "input error";
+ }
+ return v;
 }
 
-//////////////////////
-// 📈 그래프
-//////////////////////
-function drawGraph(pred, real) {
-  let canvas = document.getElementById("graph");
-  let ctx = canvas.getContext("2d");
+function simulate(){
+ try{
+ let dose = num("dose");
+ let halfLife = num("halfLife");
+ let interval = num("interval");
+ let totalTime = num("totalTime");
+ let stopTime = parseFloat(document.getElementById("stopTime").value) || totalTime;
 
-  ctx.clearRect(0,0,300,200);
+ let k = Math.log(2)/halfLife;
+ let conc = 0;
+ drugData=[];
 
-  let allData = pred.concat(real);
-  let max = Math.max(...allData, 1);
+ for(let t=0; t<=totalTime; t++){
+   if(t % interval === 0 && t <= stopTime){
+     conc += dose;
+   }
+   conc *= Math.exp(-k);
+   drugData.push(conc);
+ }
 
-  // 예측 (파랑)
-  ctx.beginPath();
-  ctx.strokeStyle = "blue";
-  for (let i = 0; i < pred.length; i++) {
-    let x = i * (300 / pred.length);
-    let y = 200 - (pred[i] / max * 200);
-    ctx.lineTo(x,y);
+ if(drugChart) drugChart.destroy();
+
+ drugChart = new Chart(document.getElementById("drugChart"),{
+  type:"line",
+  data:{
+   labels:drugData.map((_,i)=>i),
+   datasets:[{label:"농도", data:drugData}]
   }
-  ctx.stroke();
+ });
 
-  // 실측 (빨강)
-  if (real.length > 0) {
-    ctx.beginPath();
-    ctx.strokeStyle = "red";
-    for (let i = 0; i < real.length; i++) {
-      let x = i * (300 / real.length);
-      let y = 200 - (real[i] / max * 200);
-      ctx.lineTo(x,y);
-    }
-    ctx.stroke();
+ }catch(e){}
+}
+
+// ---------------- 비교 ----------------
+let compareChart;
+
+function compare(){
+ let real = document.getElementById("realData").value
+   .split(",").map(Number)
+   .filter(v=>!isNaN(v) && v>0);
+
+ if(real.length < 2){
+   alert("실측값 부족");
+   return;
+ }
+
+ let pred = drugData.slice(0, real.length);
+
+ // 반감기 추정 (로그 기반)
+ let t1=0, t2=real.length-1;
+ let C1=real[t1];
+ let C2=real[t2];
+
+ let k = Math.log(C1/C2)/(t2-t1);
+ let halfLife = Math.log(2)/k;
+
+ document.getElementById("halfLifeResult")
+   .innerText = "추정 반감기: " + halfLife.toFixed(2);
+
+ if(compareChart) compareChart.destroy();
+
+ compareChart = new Chart(document.getElementById("compareChart"),{
+  type:"line",
+  data:{
+   labels:pred.map((_,i)=>i),
+   datasets:[
+     {label:"예측", data:pred},
+     {label:"실측", data:real}
+   ]
   }
+ });
 }
 </script>
 
