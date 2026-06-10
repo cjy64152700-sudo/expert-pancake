@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>심박 & 혈중농도 통합 앱</title>
+
+<style>
+body {
+  font-family: sans-serif;
+  text-align: center;
+  background: #111;
+  color: white;
+}
+
+h2 {
+  margin-top: 10px;
+}
+
+button {
+  padding: 10px;
+  margin: 5px;
+  border-radius: 8px;
+  border: none;
+  font-size: 16px;
+}
+
+.tab { background: #333; color: white; }
+.active { background: #ff4444; }
+
+section { display: none; }
+section.active { display: block; }
+
+video {
+  width: 90%;
+  max-width: 350px;
+  border-radius: 10px;
+}
+
+#bpm { font-size: 40px; color: #00ffcc; }
+</style>
+</head>
+
+<body>
+
+<h2>📱 생체 데이터 통합 앱</h2>
+
+<button class="tab active" onclick="switchTab(event,'heart')">심박 측정</button>
+<button class="tab" onclick="switchTab(event,'drug')">혈중 농도</button>
+
+<section id="heart" class="active">
+  <h3>심박 측정</h3>
+
+  <button onclick="startCamera()">측정 시작</button>
+  <p id="status">대기 중</p>
+
+  <video id="video" autoplay playsinline muted></video>
+  <canvas id="canvas" width="320" height="240" style="display:none;"></canvas>
+
+  <h2>심박수</h2>
+  <div id="bpm">--</div>
+
+  <p style="color:lightblue;">
+  손가락으로 카메라를 완전히 덮고 움직이지 마세요
+  </p>
+</section>
+
+<section id="drug">
+  <h3>혈중 농도 시뮬레이터</h3>
+
+  <p>시간 (초)</p>
+  <input type="range" min="0" max="60" value="0" id="timeSlider" oninput="updateSimulation()">
+
+  <p id="timeValue">0 초</p>
+
+  <h2>농도</h2>
+  <div id="conc">0</div>
+
+  <h2>예측 심박</h2>
+  <div id="predicted">--</div>
+
+  <h2>실제 심박</h2>
+  <div id="real">--</div>
+
+  <h2>오차</h2>
+  <div id="error">--</div>
+</section>
+
+<script>
+function switchTab(evt, id) {
+  document.querySelectorAll("section").forEach(s => s.classList.remove("active"));
+  document.getElementById(id).classList.add("active");
+
+  document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
+  evt.currentTarget.classList.add("active");
+}
+
+let video = document.getElementById("video");
+let canvas = document.getElementById("canvas");
+let ctx = canvas.getContext("2d");
+
+let signal = [];
+let times = [];
+let measuredBPM = 0;
+let measuring = false;
+
+async function startCamera() {
+  document.getElementById("status").innerText = "카메라 시작 중...";
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: "environment" }
+      }
+    });
+
+    video.srcObject = stream;
+
+    video.onloadedmetadata = () => {
+      video.play();
+      document.getElementById("status").innerText = "측정 중...";
+      if (!measuring) {
+        measuring = true;
+        setTimeout(measureLoop, 2000);
+      }
+    };
+
+  } catch (e) {
+    document.getElementById("status").innerText = "❌ 카메라 권한 필요";
+  }
+}
+
+function measureLoop() {
+  setInterval(() => {
+
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = frame.data;
+
+    let redSum = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      redSum += data[i];
+    }
+
+    let avg = redSum / (data.length / 4);
+
+    if (signal.length > 0) {
+      avg = 0.7 * signal[signal.length - 1] + 0.3 * avg;
+    }
+
+    signal.push(avg);
+    times.push(Date.now());
+
+    if (signal.length > 200) {
+      signal.shift();
+      times.shift();
+      calculateBPM();
+    }
+
+  }, 80);
+}
+
+function calculateBPM() {
+
+  let peaks = 0;
+  let lastPeak = 0;
+
+  const avg = signal.reduce((a,b)=>a+b)/signal.length;
+
+  for (let i = 1; i < signal.length - 1; i++) {
+    if (
+      signal[i] > signal[i - 1] &&
+      signal[i] > signal[i + 1] &&
+      signal[i] > avg + 3   // 🔥 여기만 변경됨
+    ) {
+      const t = times[i];
+
+      if (t - lastPeak > 300) {
+        peaks++;
+        lastPeak = t;
+      }
+    }
+  }
+
+  const duration = (times[times.length - 1] - times[0]) / 1000;
+  const bpm = Math.round((peaks / duration) * 60);
+
+  if (bpm > 40 && bpm < 180) {
+    measuredBPM = bpm;
+    document.getElementById("bpm").innerText = bpm + " BPM";
+  }
+}
+
+function getConcentration(t) {
+  return 100 * Math.exp(-0.05 * t);
+}
+
+function predictBPM(c) {
+  return Math.round(70 + c * 0.1);
+}
+
+function updateSimulation() {
+  const t = document.getElementById("timeSlider").value;
+
+  document.getElementById("timeValue").innerText = t + " 초";
+
+  const c = getConcentration(t);
+  document.getElementById("conc").innerText = c.toFixed(1);
+
+  const predicted = predictBPM(c);
+  document.getElementById("predicted").innerText = predicted + " BPM";
+
+  if (measuredBPM) {
+    document.getElementById("real").innerText = measuredBPM + " BPM";
+    document.getElementById("error").innerText =
+      Math.abs(predicted - measuredBPM) + " BPM";
+  }
+}
+</script>
+
+</body>
+</html>
