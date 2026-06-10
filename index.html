@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>통합 시뮬레이터</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+body { font-family: Arial; margin:20px; }
+nav button { margin-right:10px; }
+section { display:none; margin-top:20px; }
+input { margin:5px; }
+canvas { max-width:700px; margin-top:20px; }
+video { width:200px; margin-top:10px; }
+</style>
+</head>
+
+<body>
+
+<h1>헬스 통합 시뮬레이터</h1>
+
+<nav>
+<button onclick="show('heart')">심박 측정</button>
+<button onclick="show('drug')">혈중 농도</button>
+<button onclick="show('compare')">비교/맞춤화</button>
+</nav>
+
+<!-- 심박 -->
+<section id="heart">
+<h2>심박 측정 (카메라)</h2>
+<button onclick="measure()">측정 시작</button>
+<p id="bpm">BPM: -</p>
+<video id="video" autoplay muted playsinline></video>
+<canvas id="heartChart"></canvas>
+</section>
+
+<!-- 농도 -->
+<section id="drug">
+<h2>혈중 농도 계산</h2>
+
+<input id="dose" placeholder="투여량">
+<input id="halfLife" placeholder="반감기">
+<input id="interval" placeholder="투여 간격">
+<input id="totalTime" placeholder="총 시간">
+<input id="max" placeholder="최대 농도">
+<input id="min" placeholder="최소 농도">
+<input id="stopTime" placeholder="중단 시간">
+<input id="timeUnit" placeholder="시간 단위">
+
+<br>
+<button onclick="simulate()">계산</button>
+
+<canvas id="drugChart"></canvas>
+</section>
+
+<!-- 비교 -->
+<section id="compare">
+<h2>실측 vs 예측</h2>
+
+<input id="realData" placeholder="실측값 (쉼표로)">
+<button onclick="compare()">비교</button>
+
+<p id="halfLifeResult"></p>
+<canvas id="compareChart"></canvas>
+</section>
+
+<script>
+function show(id){
+ document.querySelectorAll("section").forEach(s=>s.style.display="none");
+ document.getElementById(id).style.display="block";
+}
+
+// ---------------- 심박 (카메라 기반) ----------------
+let heartChart;
+let signal = [];
+
+async function measure(){
+ try{
+   const stream = await navigator.mediaDevices.getUserMedia({
+     video: { facingMode: "environment" }
+   });
+
+   const video = document.getElementById("video");
+   video.srcObject = stream;
+
+   const canvas = document.createElement("canvas");
+   const ctx = canvas.getContext("2d");
+
+   signal = [];
+   let start = Date.now();
+
+   function capture(){
+     if(Date.now() - start > 10000){
+       processSignal();
+       return;
+     }
+
+     canvas.width = video.videoWidth;
+     canvas.height = video.videoHeight;
+
+     ctx.drawImage(video,0,0);
+
+     let frame = ctx.getImageData(0,0,canvas.width,canvas.height);
+     let sum = 0;
+
+     for(let i=0;i<frame.data.length;i+=4){
+       sum += frame.data[i]; // red channel
+     }
+
+     let avg = sum / (frame.data.length/4);
+     signal.push(avg);
+
+     requestAnimationFrame(capture);
+   }
+
+   capture();
+
+ }catch(e){
+   alert("카메라 접근 실패: HTTPS(GitHub Pages)에서 실행해야 합니다.");
+ }
+}
+
+function processSignal(){
+ let avg = signal.reduce((a,b)=>a+b)/signal.length;
+
+ let peaks = signal.filter(v => v > avg + 3);
+ let bpm = peaks.length * 6;
+
+ document.getElementById("bpm").innerText = "BPM: " + bpm;
+
+ if(heartChart) heartChart.destroy();
+
+ heartChart = new Chart(document.getElementById("heartChart"),{
+  type:"line",
+  data:{
+   labels:signal.map((_,i)=>i),
+   datasets:[{label:"Signal", data:signal}]
+  }
+ });
+}
+
+// ---------------- 농도 ----------------
+let drugData = [];
+let drugChart;
+
+function num(id){
+ let v = parseFloat(document.getElementById(id).value);
+ if(isNaN(v) || v <= 0){
+   alert(id + " 값 오류");
+   throw "input error";
+ }
+ return v;
+}
+
+function simulate(){
+ try{
+ let dose = num("dose");
+ let halfLife = num("halfLife");
+ let interval = num("interval");
+ let totalTime = num("totalTime");
+ let stopTime = parseFloat(document.getElementById("stopTime").value) || totalTime;
+
+ let k = Math.log(2)/halfLife;
+ let conc = 0;
+ drugData=[];
+
+ for(let t=0; t<=totalTime; t++){
+   if(t % interval === 0 && t <= stopTime){
+     conc += dose;
+   }
+   conc *= Math.exp(-k);
+   drugData.push(conc);
+ }
+
+ if(drugChart) drugChart.destroy();
+
+ drugChart = new Chart(document.getElementById("drugChart"),{
+  type:"line",
+  data:{
+   labels:drugData.map((_,i)=>i),
+   datasets:[{label:"농도", data:drugData}]
+  }
+ });
+
+ }catch(e){}
+}
+
+// ---------------- 비교 ----------------
+let compareChart;
+
+function compare(){
+ let real = document.getElementById("realData").value
+   .split(",").map(Number)
+   .filter(v=>!isNaN(v) && v>0);
+
+ if(real.length < 2){
+   alert("실측값 부족");
+   return;
+ }
+
+ let pred = drugData.slice(0, real.length);
+
+ let t1=0, t2=real.length-1;
+ let C1=real[t1];
+ let C2=real[t2];
+
+ let k = Math.log(C1/C2)/(t2-t1);
+ let halfLife = Math.log(2)/k;
+
+ document.getElementById("halfLifeResult")
+   .innerText = "추정 반감기: " + halfLife.toFixed(2);
+
+ if(compareChart) compareChart.destroy();
+
+ compareChart = new Chart(document.getElementById("compareChart"),{
+  type:"line",
+  data:{
+   labels:pred.map((_,i)=>i),
+   datasets:[
+     {label:"예측", data:pred},
+     {label:"실측", data:real}
+   ]
+  }
+ });
+}
+</script>
+
+</body>
+</html>
